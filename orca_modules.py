@@ -1898,3 +1898,4 @@ class Net(nn.Module):
             return cur, output1d
         else:
             return cur
+
