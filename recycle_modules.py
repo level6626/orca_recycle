@@ -189,7 +189,7 @@ class NetRcyc2d(Net):
         """
         Orca 1Mb model with recycling mechanism
         """
-        super(NetRcyc2d, self).__init__()
+        super(NetRcyc2d, self).__init__(num_1d=num_1d)
         self.mconv = nn.Conv2d(1, 128, kernel_size=(1, 1), padding=0)
         
     def forward(self, x, mat=None):

@@ -16,14 +16,14 @@ from selene_sdk.samplers.dataloader import SamplerDataLoader
 
 sys.path.append("..")
 from selene_utils2 import *
-from recycle_modules import NetRcyc1d
+from recycle_modules import NetRcyc2d
 
 import pdb
 
 # Suppress/hide the warning
 np.seterr(invalid='ignore')
 
-modelstr = "h1esc_a_rcyc_1d"
+modelstr = "h1esc_a_rcyc_2d"
 seed = 314
 N_rcyc = 4
 
@@ -106,13 +106,13 @@ if __name__ == "__main__":
 
     bceloss = nn.BCELoss()
     try:
-        net = nn.DataParallel(NetRcyc1d(num_1d=32))
+        net = nn.DataParallel(NetRcyc2d(num_1d=32))
         net.load_state_dict(
             torch.load("./models/model_" + modelstr.replace("_swa", "") + ".checkpoint")
         )
     except:
         print("no saved model found!")
-        net = nn.DataParallel(NetRcyc1d(num_1d=32))
+        net = nn.DataParallel(NetRcyc2d(num_1d=32))
         ## use pretrained weights
         net_dict = net.state_dict()
         pretrained_dict = torch.load(MODELA_PATH)
@@ -226,7 +226,7 @@ if __name__ == "__main__":
                         pre_pred = None
                         for idx_rcyc in range(N_rcyc):
                             pred, pred_1d = net(torch.Tensor(sequence).transpose(1, 2).cuda(), pre_pred)
-
+                        
                     target_r = np.nanmean(
                         np.nanmean(np.reshape(target, (target.shape[0], 250, 4, 250, 4)), axis=4),
                         axis=2,
