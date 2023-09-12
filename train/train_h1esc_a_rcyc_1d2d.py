@@ -219,7 +219,7 @@ if __name__ == "__main__":
                         "./models/model_" + modelstr + ".optimizer",
                     )
 
-            if i % 2 == 0:
+            if i % 2000 == 0:
                 if use_swa:
                     swanet.eval()
                 else:
