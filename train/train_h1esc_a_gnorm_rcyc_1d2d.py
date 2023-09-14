@@ -33,7 +33,7 @@ torch.set_default_tensor_type("torch.FloatTensor")
 os.makedirs("./models/", exist_ok=True)
 os.makedirs("./png/", exist_ok=True)
 
-MODELA_PATH = "./models/orca_h1esc.net0.statedict"
+MODELA_PATH = "./baseline_models/model_h1esc_a_gnorm.checkpoint"
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--swa":
         print("Training in SWA mode.")
@@ -119,8 +119,8 @@ if __name__ == "__main__":
         ## use pretrained weights
         net_dict = net.state_dict()
         pretrained_dict = torch.load(MODELA_PATH)
-        for key in list(pretrained_dict.keys())[1:]:
-            net_dict[re.sub(r"^module\.", "", key)] = pretrained_dict[key]
+        for key in list(pretrained_dict.keys()):
+            net_dict[key] = pretrained_dict[key]
         net.load_state_dict(net_dict)
 
     net.cuda()
