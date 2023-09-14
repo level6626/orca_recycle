@@ -141,9 +141,9 @@ if __name__ == "__main__":
     #     optimizer, mode="max", factor=0.9, patience=10, threshold=0
     # )
 
-    i = 0
+    i = 1999
     loss_history = []
-    val_cor_best, val_mse_best = 0, 1
+    val_cor_best, val_mse_best, val_loss_best = 0, 1, 100000
     normmat_r = np.reshape(normmat, (250, 4, 250, 4)).mean(axis=1).mean(axis=2)
     eps = np.min(normmat_r)
 
@@ -185,7 +185,7 @@ if __name__ == "__main__":
                                                  250, 
                                                  marginal_prob_std_fn,
                                                  diffusion_coeff_fn,
-                                                 16,
+                                                 sequence.shape[0],
                                                  device='cuda')
                 figshow(pred[0, 0, :, :])
                 plt.savefig("./png/model_" + modelstr + "." + str(i) + ".pred.png")
@@ -216,6 +216,7 @@ if __name__ == "__main__":
 
                 corr = []
                 mse = []
+                val_loss = []
                 mseloss = nn.MSELoss()
                 t = 0
                 for sequence, target, target_1d in zip(
@@ -223,14 +224,6 @@ if __name__ == "__main__":
                     np.array_split(validation_targets, 256),
                     np.array_split(validation_target_1ds, 256),
                 ):
-                    pred = Euler_Maruyama_sampler(net,
-                                                 torch.Tensor(sequence).transpose(1, 2).cuda(),
-                                                 250, 
-                                                 marginal_prob_std_fn,
-                                                 diffusion_coeff_fn,
-                                                 16,
-                                                 device='cuda')
-
                     target_r = np.nanmean(
                         np.nanmean(
                             np.reshape(target, (target.shape[0], 250, 4, 250, 4)),
@@ -238,69 +231,104 @@ if __name__ == "__main__":
                         ),
                         axis=2,
                     )
-                    if t < 10:
-                        figshow(pred[0, 0, :, :])
-                        plt.savefig(
-                            "./png/model_" + modelstr + ".test" + str(t) + ".pred.png"
-                        )
-                        figshow(
-                            np.log(((target_r + eps) / (normmat_r + eps)))[0, :, :],
-                            np=True,
-                        )
-                        plt.savefig(
-                            "./png/model_" + modelstr + ".test" + str(t) + ".label.png"
-                        )
-                    t += 1
-                    if np.mean(np.isnan(target_r)) < 0.7:
-                        target_cuda = torch.Tensor(
-                            np.log(((target_r + eps) / (normmat_r + eps)))
-                        ).cuda()
-                        loss = (
-                            (
-                                pred[:, 0, :, :][~torch.isnan(target_cuda)]
-                                - target_cuda[~torch.isnan(target_cuda)]
-                            )
-                            ** 2
-                        ).mean()
-                        mse.append(loss.detach().cpu().numpy())
-                        pred = (
-                            pred[:, 0, :, :]
-                            .detach()
-                            .cpu()
-                            .numpy()
-                            .reshape((pred.shape[0], -1))
-                        )
-                        target = np.log(((target_r + eps) / (normmat_r + eps))).reshape(
-                            (pred.shape[0], -1)
-                        )
-                        for j in range(pred.shape[0]):
-                            if np.mean(np.isnan(target[j, :])) < 0.7:
-                                corr.append(
-                                    pearsonr(
-                                        pred[j, ~np.isnan(target[j, :])],
-                                        target[j, ~np.isnan(target[j, :])],
-                                    )[0]
-                                )
-                            else:
-                                corr.append(np.nan)
-                corr_mean = np.nanmean(corr)
-                mse_mean = np.mean(mse)
-                # scheduler.step(corr_mean)
-                if val_cor_best < corr_mean:
+                    target_cuda = torch.Tensor(
+                        np.log(((target_r + eps) / (normmat_r + eps)))
+                    ).cuda()[:, None, :, :]
+
+                    loss = loss_fn(
+                        net, 
+                        torch.Tensor(sequence).transpose(1, 2).cuda(), 
+                        target_cuda, 
+                        marginal_prob_std_fn
+                    )
+                    val_loss.append(loss.detach().cpu().numpy())
+                    
+                val_loss_mean = np.mean(val_loss)
+                if val_loss_best > val_loss_mean:
                     torch.save(
                         net.state_dict(),
-                        "./models/model_" + modelstr + ".corbest.checkpoint",
+                        "./models/model_" + modelstr + ".lossbest.checkpoint",
                     )
-                    val_cor_best = corr_mean
-                if val_mse_best > mse_mean:
-                    torch.save(
-                        net.state_dict(),
-                        "./models/model_" + modelstr + ".msebest.checkpoint",
-                    )
-                    val_mse_best = mse_mean
+                    val_loss_best = val_loss_mean
+            
+                #     pred = Euler_Maruyama_sampler(net,
+                #                                  torch.Tensor(sequence).transpose(1, 2).cuda(),
+                #                                  250, 
+                #                                  marginal_prob_std_fn,
+                #                                  diffusion_coeff_fn,
+                #                                  sequence.shape[0],
+                #                                  device='cuda')
+
+                #     target_r = np.nanmean(
+                #         np.nanmean(
+                #             np.reshape(target, (target.shape[0], 250, 4, 250, 4)),
+                #             axis=4,
+                #         ),
+                #         axis=2,
+                #     )
+                #     if t < 10:
+                #         figshow(pred[0, 0, :, :])
+                #         plt.savefig(
+                #             "./png/model_" + modelstr + ".test" + str(t) + ".pred.png"
+                #         )
+                #         figshow(
+                #             np.log(((target_r + eps) / (normmat_r + eps)))[0, :, :],
+                #             np=True,
+                #         )
+                #         plt.savefig(
+                #             "./png/model_" + modelstr + ".test" + str(t) + ".label.png"
+                #         )
+                #     t += 1
+                #     if np.mean(np.isnan(target_r)) < 0.7:
+                #         target_cuda = torch.Tensor(
+                #             np.log(((target_r + eps) / (normmat_r + eps)))
+                #         ).cuda()
+                #         loss = (
+                #             (
+                #                 pred[:, 0, :, :][~torch.isnan(target_cuda)]
+                #                 - target_cuda[~torch.isnan(target_cuda)]
+                #             )
+                #             ** 2
+                #         ).mean()
+                #         mse.append(loss.detach().cpu().numpy())
+                #         pred = (
+                #             pred[:, 0, :, :]
+                #             .detach()
+                #             .cpu()
+                #             .numpy()
+                #             .reshape((pred.shape[0], -1))
+                #         )
+                #         target = np.log(((target_r + eps) / (normmat_r + eps))).reshape(
+                #             (pred.shape[0], -1)
+                #         )
+                #         for j in range(pred.shape[0]):
+                #             if np.mean(np.isnan(target[j, :])) < 0.7:
+                #                 corr.append(
+                #                     pearsonr(
+                #                         pred[j, ~np.isnan(target[j, :])],
+                #                         target[j, ~np.isnan(target[j, :])],
+                #                     )[0]
+                #                 )
+                #             else:
+                #                 corr.append(np.nan)
+                # corr_mean = np.nanmean(corr)
+                # mse_mean = np.mean(mse)
+                # # scheduler.step(corr_mean)
+                # if val_cor_best < corr_mean:
+                #     torch.save(
+                #         net.state_dict(),
+                #         "./models/model_" + modelstr + ".corbest.checkpoint",
+                #     )
+                #     val_cor_best = corr_mean
+                # if val_mse_best > mse_mean:
+                #     torch.save(
+                #         net.state_dict(),
+                #         "./models/model_" + modelstr + ".msebest.checkpoint",
+                #     )
+                #     val_mse_best = mse_mean
                 print(
-                    "Average Corr{0}, MSE {1}".format(
-                        corr_mean, mse_mean
+                    "Average Loss{0}".format(
+                        val_loss_mean
                     )
                 )
                 del pred
