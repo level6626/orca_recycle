@@ -556,3 +556,16 @@ class ScoreNet(nn.Module):
         cur = cur / self.marginal_prob_std(t)[:, None, None, None]
 
         return cur
+
+
+class ScoreNet_a(ScoreNet):
+    '''
+    Directly predict the target
+    '''
+    def __init__(self, marginal_prob_std, channels=[32, 64, 128], embed_dim=128, num_1d=None):
+        super().__init__(marginal_prob_std, channels, embed_dim, num_1d)
+    
+    def forward(self, x, mat, t):
+        cur = super().forward(x, mat, t)
+        cur = self.marginal_prob_std(t)[:, None, None, None] * cur
+        return cur
