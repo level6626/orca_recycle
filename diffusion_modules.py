@@ -569,3 +569,339 @@ class ScoreNet_a(ScoreNet):
         cur = super().forward(x, mat, t)
         cur = self.marginal_prob_std(t)[:, None, None, None] * cur
         return cur
+
+class ScoreNet_1d(ScoreNet):
+    '''
+    Add 1d chromatin profile guidance.
+    Remove time embeding before addition of 2d matrices
+    '''
+    def __init__(self, marginal_prob_std, channels=[32, 64, 128], embed_dim=128, num_1d=None):
+        super().__init__(marginal_prob_std, channels, embed_dim, num_1d)
+        if num_1d is not None:
+            self.final_1d = nn.Sequential(
+                nn.Conv1d(128, 128, kernel_size=1, padding=0),
+                nn.GroupNorm(1, 128),
+                nn.ReLU(inplace=True),
+                nn.Conv1d(128, num_1d, kernel_size=1, padding=0),
+                nn.Sigmoid(),
+            )
+        self.num_1d = num_1d
+    
+    def forward(self, x, mat, t):
+        """Forward propagation of a batch."""
+
+        def run0(x, mat, t, dummy):
+            embed = self.act(self.embed(t))
+            lout1 = self.lconv1(x)
+            out1 = self.conv1(lout1)
+            lout2 = self.lconv2(out1 + lout1)
+            out2 = self.conv2(lout2)
+            lout3 = self.lconv3(out2 + lout2)
+            if mat is not None:
+                mat1d = self.mEncoder(mat)
+                mat1d = self.upSample(mat1d)
+                out3 = self.conv3(lout3 + mat1d)
+            else:
+                out3 = self.conv3(lout3)
+            out3 = out3 + self.dense3(embed)
+            lout4 = self.lconv4(out3 + lout3)
+            out4 = self.conv4(lout4)
+            out4 = out4 + self.dense4(embed)
+            lout5 = self.lconv5(out4 + lout4)
+            out5 = self.conv5(lout5)
+            out5 = out5 + self.dense5(embed)
+            lout6 = self.lconv6(out5 + lout5)
+            out6 = self.conv6(lout6)
+            out6 = out6 + self.dense6(embed)
+            lout7 = self.lconv7(out6 + lout6)
+            out7 = self.conv7(lout7)
+            mat = out7[:, :, :, None] + out7[:, :, None, :]
+            cur = mat
+            if self.num_1d:
+                output1d = self.final_1d(out7)
+                return cur, output1d, embed
+            else:
+                return cur, embed
+
+        dummy = torch.Tensor(1)
+        dummy.requires_grad = True
+        if self.num_1d:
+            cur, output1d, embed = checkpoint(run0, x, mat, t, dummy)
+        else:
+            cur, embed = checkpoint(run0, x, mat, t, dummy)
+
+        def run1(cur, mat, embed):
+            first = True
+            if mat is not None:
+                cur = cur + self.mconv(mat)
+            for lm, m, d in zip(self.lconvtwos[:7], self.convtwos[:7], self.denses[:7]):
+                if first:
+                    cur = lm(cur)
+
+                    first = False
+                else:
+                    cur = lm(cur) + cur
+                cur = m(cur) + cur
+                cur = d(embed) + cur
+            return cur
+
+        def run2(cur, embed):
+            for lm, m, d in zip(self.lconvtwos[7:13], self.convtwos[7:13], self.denses[7:13]):
+                cur = lm(cur) + cur
+                cur = m(cur) + cur
+                cur = d(embed) + cur
+            return cur
+
+        def run3(cur, embed):
+            for lm, m, d in zip(self.lconvtwos[13:], self.convtwos[13:], self.denses[13:]):
+                cur = lm(cur) + cur
+                cur = m(cur) + cur
+                cur = d(embed) + cur
+
+            cur = self.final(cur)
+            cur = 0.5 * cur + 0.5 * cur.transpose(2, 3)
+            return cur
+
+        cur = checkpoint(run1, cur, mat, embed)
+        cur = checkpoint(run2, cur, embed)
+        cur = checkpoint(run3, cur, embed)
+        
+        if self.num_1d:
+            return cur, output1d
+        else:
+            return cur
+
+
+class SeqEncoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.lconv1 = nn.Sequential(
+            nn.Conv1d(4, 64, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 64),
+            nn.Conv1d(64, 64, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 64),
+        )
+
+        self.conv1 = nn.Sequential(
+            nn.Conv1d(64, 64, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 64),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(64, 64, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 64),
+            nn.ReLU(inplace=True),
+        )
+
+        self.lconv2 = nn.Sequential(
+            nn.MaxPool1d(kernel_size=4, stride=4),
+            nn.Conv1d(64, 96, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 96),
+            nn.Conv1d(96, 96, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 96),
+        )
+
+        self.conv2 = nn.Sequential(
+            nn.Conv1d(96, 96, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 96),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(96, 96, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 96),
+            nn.ReLU(inplace=True),
+        )
+
+        self.lconv3 = nn.Sequential(
+            nn.MaxPool1d(kernel_size=4, stride=4),
+            nn.Conv1d(96, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+        )
+
+        self.conv3 = nn.Sequential(
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.ReLU(inplace=True),
+        )
+
+        self.lconv4 = nn.Sequential(
+            nn.MaxPool1d(kernel_size=5, stride=5),
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+        )
+
+        self.conv4 = nn.Sequential(
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.ReLU(inplace=True),
+        )
+
+        self.lconv5 = nn.Sequential(
+            nn.MaxPool1d(kernel_size=5, stride=5),
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+        )
+
+        self.conv5 = nn.Sequential(
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.ReLU(inplace=True),
+        )
+
+        self.lconv6 = nn.Sequential(
+            nn.MaxPool1d(kernel_size=5, stride=5),
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+        )
+
+        self.conv6 = nn.Sequential(
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.ReLU(inplace=True),
+        )
+
+        self.lconv7 = nn.Sequential(
+            nn.MaxPool1d(kernel_size=2, stride=2),
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+        )
+
+        self.conv7 = nn.Sequential(
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(128, 128, kernel_size=9, padding=4),
+            nn.GroupNorm(1, 128),
+            nn.ReLU(inplace=True),
+        )
+    
+    def forward(self, x):
+        def run0(x, dummy):
+            lout1 = self.lconv1(x)
+            out1 = self.conv1(lout1)
+            lout2 = self.lconv2(out1 + lout1)
+            out2 = self.conv2(lout2)
+            lout3 = self.lconv3(out2 + lout2)
+            out3 = self.conv3(lout3)
+            lout4 = self.lconv4(out3 + lout3)
+            out4 = self.conv4(lout4)
+            lout5 = self.lconv5(out4 + lout4)
+            out5 = self.conv5(lout5)
+            lout6 = self.lconv6(out5 + lout5)
+            out6 = self.conv6(lout6)
+            lout7 = self.lconv7(out6 + lout6)
+            out7 = self.conv7(lout7)
+            return out7
+
+        dummy = torch.Tensor(1)
+        dummy.requires_grad = True
+        cur = checkpoint(run0, x, dummy)
+        
+        return cur
+
+
+class TimeEmbedHicEncoder(MultiplicativeEncoderGnorm):
+    '''
+    Add time embedding
+    '''
+    def __init__(self, dim, n_mats, length, embed_dim=128):
+        """
+        Parameters
+        ----------
+        Mat : n_mats x Length x Length
+        """
+        super().__init__(dim, n_mats, length)
+        self.embed_dim = embed_dim
+        self.denses = nn.ModuleList(
+            [Dense1D(embed_dim, dim) for _ in range(6)]
+        )
+
+    def forward(self, mat, embed):
+        x = self.initial_x
+        for l, lm, m, d in zip(self.linear, self.lms, self.ms, self.denses):
+            x = lm(
+                x
+                + torch.matmul(
+                    l(x).view(-1, self.n_mats, self.dim, self.length), mat
+                ).sum(1)
+            )
+            x = x + m(x)
+            x = x + d(embed)
+        return x
+
+
+class ScoreNet_b(ScoreNet):
+    '''
+    Predict score
+    No time embedding in Seq-encoder
+    Add time embeding in Hic-encoder
+    '''
+    def __init__(self, seqEncoder, marginal_prob_std, channels=[32, 64, 128], embed_dim=128, num_1d=None):
+        super().__init__(marginal_prob_std, channels, embed_dim, num_1d)
+        self.seqEncoder = seqEncoder
+        self.mEncoder = TimeEmbedHicEncoder(dim=128, n_mats=1, length=250, embed_dim=128)
+        self.mconv = nn.Conv1d(256, 128, kernel_size=1, padding=0)
+    
+    def forward(self, x, mat, t):
+        cur = self.seqEncoder(x)
+        
+        embed = self.act(self.embed(t))
+        tcur = self.mEncoder(mat, embed)
+        cur = torch.cat([cur, tcur], 1)
+        cur = self.mconv(cur)
+        cur = cur[:, :, :, None] + cur[:, :, None, :]
+        
+        def run1(cur, embed):
+            first = True
+            for lm, m, d in zip(self.lconvtwos[:7], self.convtwos[:7], self.denses[:7]):
+                if first:
+                    cur = lm(cur)
+
+                    first = False
+                else:
+                    cur = lm(cur) + cur
+                cur = m(cur) + cur
+                cur = d(embed) + cur
+            return cur
+
+        def run2(cur, embed):
+            for lm, m, d in zip(self.lconvtwos[7:13], self.convtwos[7:13], self.denses[7:13]):
+                cur = lm(cur) + cur
+                cur = m(cur) + cur
+                cur = d(embed) + cur
+            return cur
+
+        def run3(cur, embed):
+            for lm, m, d in zip(self.lconvtwos[13:], self.convtwos[13:], self.denses[13:]):
+                cur = lm(cur) + cur
+                cur = m(cur) + cur
+                cur = d(embed) + cur
+
+            cur = self.final(cur)
+            cur = 0.5 * cur + 0.5 * cur.transpose(2, 3)
+            return cur
+
+        cur = checkpoint(run1, cur, embed)
+        cur = checkpoint(run2, cur, embed)
+        cur = checkpoint(run3, cur, embed)
+        
+        return cur
+        
